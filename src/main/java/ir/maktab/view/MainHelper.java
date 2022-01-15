@@ -1,11 +1,17 @@
 package ir.maktab.view;
 
-import ir.maktab.dto.UserDto;
+import ir.maktab.config.SpringConfig;
+import ir.maktab.data.model.*;
+import ir.maktab.data.model.enums.OrderStatus;
+import ir.maktab.data.model.enums.UserType;
 import ir.maktab.exceptions.*;
-import ir.maktab.model.*;
-import ir.maktab.model.enums.*;
-import ir.maktab.service.*;
+import ir.maktab.service.CustomerService;
+import ir.maktab.service.ExpertService;
+import ir.maktab.service.ManagerService;
+import ir.maktab.service.UserService;
 import ir.maktab.util.Validator;
+import org.springframework.context.annotation.AnnotationConfigApplicationContext;
+import org.springframework.data.domain.Page;
 
 import java.text.ParseException;
 import java.text.SimpleDateFormat;
@@ -13,10 +19,19 @@ import java.util.*;
 
 public class MainHelper {
     private static final Scanner SCANNER = new Scanner(System.in);
-    private static final UserService USER_SERVICE = new UserService();
+
+    private static final AnnotationConfigApplicationContext applicationContext = new AnnotationConfigApplicationContext(SpringConfig.class);
+    private static final UserService USER_SERVICE = applicationContext.getBean(UserService.class);
+    private static final ManagerService MANAGER_SERVICE = applicationContext.getBean(ManagerService.class);
+    private static final CustomerService CUSTOMER_SERVICE = applicationContext.getBean(CustomerService.class);
+    private static final ExpertService EXPERT_SERVICE = applicationContext.getBean(ExpertService.class);
+
+
+    /*private static final UserService USER_SERVICE = new UserService();
     private static final ManagerService MANAGER_SERVICE = new ManagerService();
     private static final CustomerService CUSTOMER_SERVICE = new CustomerService();
-    private static final ExpertService EXPERT_SERVICE = new ExpertService();
+    private static final ExpertService EXPERT_SERVICE = new ExpertService();*/
+
 
     public static void showMenu() {
         do {
@@ -44,7 +59,7 @@ public class MainHelper {
     }
 
     private static void showExpertMenu() {
-        UserDto userDto = showLoginMenu(UserType.EXPERT);
+        User userDto = showLoginMenu(UserType.EXPERT);
         System.out.println("Welcome " + userDto.getName());
         do {
             System.out.println("*** Expert Menu ***" +
@@ -63,7 +78,7 @@ public class MainHelper {
         } while (true);
     }
 
-    private static void showAddOfferMenu(UserDto userDto) {
+    private static void showAddOfferMenu(User userDto) {
         List<Order> orderList = EXPERT_SERVICE.getOpenOrders(userDto);
         if (orderList.size() == 0) {
             System.out.println("There Is No Order To Show.");
@@ -81,7 +96,7 @@ public class MainHelper {
         }
     }
 
-    private static void showAddOfferDetailMenu(UserDto userDto, Order order) {
+    private static void showAddOfferDetailMenu(User userDto, Order order) {
         try {
             System.out.println("Please Fill Your Offer Data: ");
             System.out.println("Price: ");
@@ -92,15 +107,17 @@ public class MainHelper {
             int duration = SCANNER.nextInt();
             Date date = order.getRequestedDate();
             date.setHours(hour);
-            Offer offer = EXPERT_SERVICE.addOffer(userDto, order, price, date, duration);
+            EXPERT_SERVICE.addOffer(userDto, order, price, date, duration);
             System.out.println("Offer Added Successfully.");
+        } catch (ValueMismatchException ex) {
+            System.out.println(ex.getMessage());
         } catch (InputMismatchException ex) {
             System.out.println("You Entered Invalid Number.");
         }
     }
 
     private static void showCustomerMenu() {
-        UserDto userDto = showLoginMenu(UserType.CUSTOMER);
+        User userDto = showLoginMenu(UserType.CUSTOMER);
         System.out.println("Welcome " + userDto.getName());
         do {
             System.out.println("*** Customer Menu ***" +
@@ -128,7 +145,7 @@ public class MainHelper {
         } while (true);
     }
 
-    private static void showCustomerWaitingOrdersMenu(UserDto userDto) {
+    private static void showCustomerWaitingOrdersMenu(User userDto) {
         List<Order> orderList = CUSTOMER_SERVICE.getUserOrdersByType(userDto, OrderStatus.WAITING_FOR_SELECT_EXPERT);
         if (orderList.size() == 0) {
             System.out.println("There Is No Offer To Show.");
@@ -147,25 +164,71 @@ public class MainHelper {
     }
 
     private static void showAcceptOfferMenu(Order order) {
-        List<Offer> offerList = CUSTOMER_SERVICE.getOffers(order);
-        if (offerList.size() == 0) {
-            System.out.println("There Is No Offer To Show.");
-        }
-        else {
-            System.out.println("Select An Offer To Accept");
-            showElementsByIndex(offerList);
-            try {
-                int index = SCANNER.nextInt();
-                Offer offer = offerList.get(index - 1);
-                CUSTOMER_SERVICE.acceptOffer(offer);
-                System.out.println("Offer Accepted.");
-            } catch (InputMismatchException | IndexOutOfBoundsException ex) {
-                System.out.println("You Entered Invalid Number.");
+        int pageSize = 10;
+        int pageNum = 0;
+        String sorting = null;
+        while (true) {
+            Page<Offer> page = CUSTOMER_SERVICE.getOffers(pageSize, pageNum, sorting, order);
+            int offersSize = Math.toIntExact(page.getTotalElements());
+            List<Offer> offerList = page.getContent();
+            if (offerList.size() == 0) {
+                System.out.println("There Is No Offer To Show.");
+                break;
             }
+            showPagingList(pageSize, pageNum, offersSize, offerList);
+            if (pageSize * pageNum > 0)
+                System.out.println("1) Previous Page");
+            if (offerList.size() == pageSize && pageSize * (pageNum + 1) < offersSize)
+                System.out.println("2) Next Page");
+            System.out.println("3) Add/Remove Sorting\n" +
+                    "4) Select An Offer\n" +
+                    "9) Exit");
+            int action = SCANNER.nextInt();
+            if (pageSize * pageNum > 0 && action == 1)
+                --pageNum;
+            else if (offerList.size() == pageSize && pageSize * (pageNum + 1) < offersSize && action == 2)
+                ++pageNum;
+            else if (action == 3) {
+                sorting = selectSortingFieldMenu(sorting);
+                pageNum = 0;
+            } else if (action == 4) {
+                showPagingList(pageSize, pageNum, offersSize, offerList);
+                System.out.println("\n\nWhich Offer Do You Want To Accept? ");
+                int index = SCANNER.nextInt();
+                if (index >= 1 && index <= pageSize) {
+                    Offer offer = offerList.get(index - 1);
+                    CUSTOMER_SERVICE.acceptOffer(offer);
+                    System.out.println("Offer Accepted.");
+                    break;
+                }
+            } else if (action == 9)
+                break;
+            else
+                System.out.println("You Entered Invalid Number.");
         }
     }
 
-    private static void showCustomerPaidOrdersMenu(UserDto userDto) {
+    private static String selectSortingFieldMenu(String sorting) {
+        if (sorting != null)
+            System.out.println("Current Sorting Field Is: " + sorting);
+        System.out.println("\n\nWhat Do You Want To Do? " +
+                "\n1) Sort By Expert's Score" +
+                "\n2) Sort By Offer's Price" +
+                "\n3) Remove Sorting" +
+                "\n9) Exit");
+        int action = SCANNER.nextInt();
+        if (action == 1)
+            sorting = "score";
+        else if (action == 2)
+            sorting = "price";
+        else if (action == 3)
+            sorting = null;
+        else if (action != 9)
+            System.out.println("You Entered Invalid Number.");
+        return sorting;
+    }
+
+    private static void showCustomerPaidOrdersMenu(User userDto) {
         List<Order> orderList = CUSTOMER_SERVICE.getUserOrdersByType(userDto, OrderStatus.PAID);
         if (orderList.size() == 0) {
             System.out.println("There Is No Order To Show.");
@@ -177,13 +240,15 @@ public class MainHelper {
                 int index = SCANNER.nextInt();
                 Order order = orderList.get(index - 1);
                 showAddCommentMenu(order);
-            } catch (InputMismatchException | IndexOutOfBoundsException ex) {
+            } catch (DataNotFoundException ex) {
+                System.out.println(ex.getMessage());
+            }catch (InputMismatchException | IndexOutOfBoundsException ex) {
                 System.out.println("You Entered Invalid Number.");
             }
         }
     }
 
-    private static void showCustomerDoneOrdersMenu(UserDto userDto) {
+    private static void showCustomerDoneOrdersMenu(User userDto) {
         List<Order> orderList = CUSTOMER_SERVICE.getUserOrdersByType(userDto, OrderStatus.DONE);
         if (orderList.size() == 0)
             System.out.println("There Is No Order To Show.");
@@ -194,6 +259,8 @@ public class MainHelper {
                 int index = SCANNER.nextInt();
                 Order order = orderList.get(index - 1);
                 showPayMenu(order);
+            } catch (DataNotFoundException ex) {
+                System.out.println(ex.getMessage());
             } catch (InputMismatchException | IndexOutOfBoundsException ex) {
                 System.out.println("You Entered Invalid Number.");
             }
@@ -219,24 +286,20 @@ public class MainHelper {
     }
 
     private static void showAddCommentMenu(Order order) {
-        try {
-            System.out.println("Score: ");
-            int score = SCANNER.nextInt();
-            System.out.println("Comment: ");
-            String comment = SCANNER.next();
-            CUSTOMER_SERVICE.addComment(order, score, comment);
-            System.out.println("The Comment Added Successfully.");
-        } catch (InputMismatchException ex) {
-            System.out.println("You Entered Invalid Number.");
-        }
+        System.out.println("Score: ");
+        int score = SCANNER.nextInt();
+        System.out.println("Comment: ");
+        String comment = SCANNER.next();
+        CUSTOMER_SERVICE.addComment(order, score, comment);
+        System.out.println("The Comment Added Successfully.");
     }
 
-    private static UserDto showLoginMenu(UserType userType) {
+    private static User showLoginMenu(UserType userType) {
         System.out.println("Email: ");
         String email = SCANNER.next();
         System.out.println("Password: ");
         String password = SCANNER.next();
-        UserDto userDto = null;
+        User userDto = null;
         if (UserType.CUSTOMER.equals(userType))
             userDto = CUSTOMER_SERVICE.login(email, password);
         else if (UserType.EXPERT.equals(userType))
@@ -250,7 +313,7 @@ public class MainHelper {
         return userDto;
     }
 
-    private static void showChangePasswordMenu(UserDto userDto) {
+    private static void showChangePasswordMenu(User userDto) {
         do {
             try {
                 System.out.println("New Password: ");
@@ -260,6 +323,7 @@ public class MainHelper {
                 if (password1.equals(password2)) {
                     Validator.checkPassword(password1);
                     USER_SERVICE.changeUserPassword(userDto, password1);
+                    System.out.println("Password Changed Successfully.");
                     break;
                 }
                 System.out.println("Password Does Not Match To Its Repeat!");
@@ -269,9 +333,9 @@ public class MainHelper {
         } while (true);
     }
 
-    private static void showAddOrderMenu(UserDto userDto) {
+    private static void showAddOrderMenu(User userDto) {
         List<Service> serviceList = MANAGER_SERVICE.getAllServices();
-        if (serviceList.size() == 0) {
+        if (serviceList.isEmpty()) {
             System.out.println("There Is No Service To Show.");
         }
         else {
@@ -293,7 +357,7 @@ public class MainHelper {
         }
     }
 
-    private static void showAddOrderDetailMenu(UserDto userDto, SubService subService) {
+    private static void showAddOrderDetailMenu(User userDto, SubService subService) {
         try {
             SCANNER.nextLine();
             System.out.println("Please Fill Your Order Data: ");
@@ -309,7 +373,7 @@ public class MainHelper {
             int hour = SCANNER.nextInt();
             Date date = new SimpleDateFormat("MM/dd/yyyy").parse(dateStr);
             date.setHours(hour);
-            Order order = CUSTOMER_SERVICE.addOrder(userDto, subService, address, description, price, date);
+            CUSTOMER_SERVICE.addOrder(userDto, subService, address, description, price, date);
             System.out.println("Order Added Successfully.");
         } catch (InputMismatchException ex) {
             System.out.println("You Entered Invalid Number.");
@@ -348,9 +412,9 @@ public class MainHelper {
         } while (true);
     }
 
-    private static void showServiceActionsMenu(String action, Class actionClass) {
+    private static void showServiceActionsMenu(String action, Class<? extends General> actionClass) {
         List<Service> serviceList = MANAGER_SERVICE.getAllServices();
-        if (serviceList.size() == 0) {
+        if (serviceList.isEmpty()) {
             System.out.println("There Is No Service To Show.");
         }
         else {
@@ -367,7 +431,7 @@ public class MainHelper {
                     else if ("remove".equalsIgnoreCase(action))
                         showRemoveUserFromServiceMenu(service);
                 }
-            } catch (SimilarDataException ex) {
+            } catch (SimilarDataException | DataNotFoundException ex) {
                 System.out.println(ex.getMessage());
             } catch (InputMismatchException | IndexOutOfBoundsException ex) {
                 System.out.println("You Entered Invalid Number.");
@@ -394,32 +458,33 @@ public class MainHelper {
         Map<String, Object> filterMap = new HashMap<>();
         filterMap.put("userType", UserType.EXPERT);
         int pageSize = 10;
-        int pageNum = 1;
+        int pageNum = 0;
         while (true) {
-            int usersSize = MANAGER_SERVICE.getUsersSize(filterMap);
-            List<UserDto> userList = MANAGER_SERVICE.getUsers(pageSize, pageNum, filterMap, new ArrayList<>());
+            Page<User> page = MANAGER_SERVICE.getUsers(pageSize, pageNum, filterMap);
+            int usersSize = Math.toIntExact(page.getTotalElements());
+            List<User> userList = page.getContent();
             showPagingList(pageSize, pageNum, usersSize, userList);
-            if (pageSize * (pageNum - 1) > 0)
+            if (pageSize * pageNum > 0)
                 System.out.println("1) Previous Page");
-            if (userList.size() == pageSize && pageSize * pageNum < usersSize)
+            if (userList.size() == pageSize && pageSize * (pageNum + 1) < usersSize)
                 System.out.println("2) Next Page");
             System.out.println("3) Add Or Remove Filters\n" +
                     "4) Select An User\n" +
                     "9) Exit");
             int action = SCANNER.nextInt();
-            if (pageSize * (pageNum - 1) > 0 && action == 1)
+            if (pageSize * pageNum > 0 && action == 1)
                 --pageNum;
-            else if (userList.size() == pageSize && pageSize * pageNum < usersSize && action == 2)
+            else if (userList.size() == pageSize && pageSize * (pageNum + 1) < usersSize && action == 2)
                 ++pageNum;
             else if (action == 3) {
                 showFiltersMenu(filterMap);
-                pageNum = 1;
+                pageNum = 0;
             } else if (action == 4) {
                 showPagingList(pageSize, pageNum, usersSize, userList);
                 System.out.println("\n\nWhich User Do You Want To Add? ");
                 int index = SCANNER.nextInt();
                 if (index >= 1 && index <= pageSize) {
-                    UserDto userDto = userList.get(index - 1);
+                    User userDto = userList.get(index - 1);
                     MANAGER_SERVICE.addUserToService(service, userDto);
                     System.out.printf("User [%s] Added To Service [%s].\n", userDto.getName(), service.getName());
                     break;
@@ -473,10 +538,10 @@ public class MainHelper {
     }
 
 
-    private static void showPagingList(int pageSize, int pageNum, int searchSize, Collection collection) {
-        System.out.printf("\nResults %d to %d From %d: \n", Math.min(pageSize * (pageNum - 1) + 1, searchSize), Math.min(pageSize * pageNum, searchSize), searchSize);
+    private static void showPagingList(int pageSize, int pageNum, int searchSize, List<? extends General> list) {
+        System.out.printf("\nResults %d to %d From %d: \n", Math.min(pageSize * pageNum + 1, searchSize), Math.min(pageSize * (pageNum + 1), searchSize), searchSize);
         int i = 1;
-        for (Object object : collection)
+        for (Object object : list)
             System.out.println(i++ + " - " + object);
     }
 
@@ -489,13 +554,13 @@ public class MainHelper {
         System.out.println("Description: ");
         SCANNER.nextLine();
         String description = SCANNER.nextLine();
-        SubService subService = MANAGER_SERVICE.addSubService(service, name, basePrice, description);
+        MANAGER_SERVICE.addSubService(service, name, basePrice, description);
         System.out.printf("Sub-Service [%s] Added Successfully To Service [%s].\n", name, service.getName());
     }
 
-    private static void showElementsByIndex(Collection collection) {
+    private static void showElementsByIndex(List<? extends General> list) {
         int i = 1;
-        for (Object object : collection) {
+        for (Object object : list) {
             System.out.println(i++ + " - " + object);
         }
     }
@@ -504,7 +569,7 @@ public class MainHelper {
         System.out.println("Please Enter New Service Name: ");
         String name = SCANNER.next();
         try {
-            Service service = MANAGER_SERVICE.addService(name);
+            MANAGER_SERVICE.addService(name);
             System.out.printf("Service [%s] Added Successfully.\n", name);
         } catch (SimilarDataException ex) {
             System.out.println(ex.getMessage());
